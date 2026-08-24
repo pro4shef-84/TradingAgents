@@ -18,6 +18,7 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
+    "TRADINGAGENTS_RESEARCHER_TEMPERATURE": "researcher_temperature",
     "TRADINGAGENTS_LLM_MAX_RETRIES":      "llm_max_retries",
     # Provider-specific reasoning/thinking knobs (None = each provider's own
     # default). Settable here for non-interactive runs; the CLI also offers an
@@ -96,6 +97,14 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # variation on models that honor it; reasoning models largely ignore it
     # and no setting makes LLM output bit-identical across runs (see README).
     "temperature": None,
+    # Sampling temperature for the bull and bear researchers only. None makes
+    # them inherit ``temperature`` like every other agent. Set it higher than
+    # ``temperature`` to keep the investment debate adversarial while the
+    # Portfolio Manager's rating stays reproducible — the two want opposite
+    # things, and a single global temperature cannot serve both. Matters most
+    # at high ``max_debate_rounds``, where a low temperature can collapse many
+    # turns into agreement instead of argument.
+    "researcher_temperature": None,
     # SDK retry budget forwarded to every provider chat client. None leaves each
     # provider/SDK at its own default (usually 2). Raise it to ride out bursty
     # 429 throttling on rate-limited deployments instead of aborting a run (#1091).

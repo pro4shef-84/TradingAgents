@@ -81,3 +81,51 @@ class TestProviderKwargsTemperature:
 
     def test_empty_string_omitted(self):
         assert "temperature" not in self._kwargs_for("")
+
+
+@pytest.mark.unit
+class TestResearcherTemperature:
+    """The bull/bear researchers may run hotter than the rest of the graph.
+
+    At high ``max_debate_rounds`` a low global temperature can collapse the
+    investment debate into agreement, but the Portfolio Manager's rating is
+    consumed downstream and wants to stay reproducible.
+    """
+
+    def _graph_setup(self, researcher_llm=None):
+        from tradingagents.graph.conditional_logic import ConditionalLogic
+        from tradingagents.graph.setup import GraphSetup
+
+        return GraphSetup(
+            "quick-llm",
+            "deep-llm",
+            {},
+            ConditionalLogic(),
+            researcher_thinking_llm=researcher_llm,
+        )
+
+    def test_researchers_default_to_the_quick_client(self):
+        # Callers that never separate the two must be unaffected.
+        assert self._graph_setup().researcher_thinking_llm == "quick-llm"
+
+    def test_researchers_use_their_own_client_when_given(self):
+        setup = self._graph_setup(researcher_llm="hot-llm")
+        assert setup.researcher_thinking_llm == "hot-llm"
+        # The Portfolio Manager stays on the deep client either way.
+        assert setup.deep_thinking_llm == "deep-llm"
+
+    def test_default_researcher_temperature_is_none(self, monkeypatch):
+        import tradingagents.default_config as dc
+
+        monkeypatch.delenv("TRADINGAGENTS_RESEARCHER_TEMPERATURE", raising=False)
+        importlib.reload(dc)
+        assert dc.DEFAULT_CONFIG["researcher_temperature"] is None
+
+    def test_env_sets_researcher_temperature(self, monkeypatch):
+        import tradingagents.default_config as dc
+
+        monkeypatch.setenv("TRADINGAGENTS_RESEARCHER_TEMPERATURE", "0.7")
+        importlib.reload(dc)
+        assert float(dc.DEFAULT_CONFIG["researcher_temperature"]) == 0.7
+        monkeypatch.delenv("TRADINGAGENTS_RESEARCHER_TEMPERATURE", raising=False)
+        importlib.reload(dc)

@@ -51,10 +51,17 @@ class GraphSetup:
         deep_thinking_llm: Any,
         tool_nodes: dict[str, ToolNode],
         conditional_logic: ConditionalLogic,
+        researcher_thinking_llm: Any = None,
     ):
-        """Initialize with required components."""
+        """Initialize with required components.
+
+        ``researcher_thinking_llm`` drives the bull and bear researchers only;
+        it defaults to the quick-thinking client so callers that do not
+        separate the two are unaffected.
+        """
         self.quick_thinking_llm = quick_thinking_llm
         self.deep_thinking_llm = deep_thinking_llm
+        self.researcher_thinking_llm = researcher_thinking_llm or quick_thinking_llm
         self.tool_nodes = tool_nodes
         self.conditional_logic = conditional_logic
 
@@ -80,8 +87,8 @@ class GraphSetup:
         }
 
         # Create researcher and manager nodes
-        bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
-        bear_researcher_node = create_bear_researcher(self.quick_thinking_llm)
+        bull_researcher_node = create_bull_researcher(self.researcher_thinking_llm)
+        bear_researcher_node = create_bear_researcher(self.researcher_thinking_llm)
         research_manager_node = create_research_manager(self.deep_thinking_llm)
         trader_node = create_trader(self.quick_thinking_llm)
 

@@ -114,6 +114,25 @@ class TradingAgentsGraph:
         self.deep_thinking_llm = deep_client.get_llm()
         self.quick_thinking_llm = quick_client.get_llm()
 
+        # The bull/bear researchers may run hotter than everyone else. Their
+        # job is to disagree, while the Portfolio Manager's rating is consumed
+        # downstream and wants to be reproducible; one global temperature
+        # cannot serve both. Unset means inherit, so the extra client is only
+        # built when the caller actually asked for a different value.
+        researcher_temperature = self.config.get("researcher_temperature")
+        if researcher_temperature is not None and researcher_temperature != "":
+            researcher_kwargs = dict(llm_kwargs)
+            researcher_kwargs["temperature"] = float(researcher_temperature)
+            researcher_client = create_llm_client(
+                provider=self.config["llm_provider"],
+                model=self.config["quick_think_llm"],
+                base_url=self.config.get("backend_url"),
+                **researcher_kwargs,
+            )
+            self.researcher_thinking_llm = researcher_client.get_llm()
+        else:
+            self.researcher_thinking_llm = self.quick_thinking_llm
+
         self.memory_log = TradingMemoryLog(self.config)
 
         # Create tool nodes
@@ -129,6 +148,7 @@ class TradingAgentsGraph:
             self.deep_thinking_llm,
             self.tool_nodes,
             self.conditional_logic,
+            researcher_thinking_llm=self.researcher_thinking_llm,
         )
 
         self.propagator = Propagator(
