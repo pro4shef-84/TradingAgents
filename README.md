@@ -1,3 +1,72 @@
+# Local trade alerts
+
+The active workflow is `scripts/trade_automation.py`. It owns screening, trade plans,
+market-hours observations and Slack delivery. The original TradingAgents library
+and CLI remain available as separate research tools; they are not scheduled.
+
+### Automatic trade-plan posts and price observations
+
+The local LaunchAgent `com.shef.market-trading.trade-alerts` runs
+`scripts/trade_automation.py serve` under the logged-in macOS user.
+The configured investor Slack webhook is the delivery destination; its channel
+name is not available through the webhook. Credentials remain in the existing
+local environment file and are never copied into messages or service logs.
+
+On XNYS trading days, the service starts the 2,000-stock refresh at **06:00
+America/Denver** and posts when it completes. It publishes a **06:45 premarket
+update**, checks completed one-minute price observations during the regular
+session, and posts a recap five minutes after the actual exchange close.
+New entries require a complete 15-minute confirmation followed by a later retest.
+Weekends, exchange holidays, early closes, and daylight-saving changes use the
+exchange calendar. Missed premarket scans are not presented as live-market
+recommendations later in the day.
+
+The existing account authorizes IEX observations but rejected current SIP quote
+access during setup. Alerts explicitly identify **IEX single-exchange** coverage;
+historical SIP remains the daily-analysis source. New entry alerts require
+observations no older than three minutes and a successful morning/news update.
+Missing candle minutes prevent confirmation. Historic catch-up observations are
+labeled with their original time. A minute crossing both stop and target is
+reported as requiring review; the system never invents execution order or fills.
+
+Plans use `chart_plans_v1` in `tradingagents/pilot/trade_planner.py`: up to two
+long and two short setups, three evidence families minimum, chart-based stops,
+at least 2R to the first target, capped stop distance, and no padding. Unsupported
+techniques abstain. The automatic planner excludes strongly extended moves and
+clinical-event company names. New material-headline patterns send a candidate
+to review instead of inferring a direction. News interpretation is a conservative
+rule gate, not a comprehensive human or LLM news review. The universe membership
+uses the latest saved universe file; prices and news are refreshed each morning.
+
+CPI is explicitly configured for November 10, 2026. The premarket update attempts
+the official BLS RSS feed and also collects current SPY/macro news. If the BLS
+feed is unavailable or stale, it says so rather than reporting invented results.
+Future known economic events can be maintained in `results/automation/config.json`.
+
+```sh
+.venv/bin/python scripts/trade_automation.py status
+.venv/bin/python scripts/trade_automation.py pause
+.venv/bin/python scripts/trade_automation.py resume
+```
+
+State, plans, source snapshots, delivery receipts and logs are under
+`results/automation/`. Delivery attempts are persisted before network writes;
+ambiguous attempts are not automatically retried. The destination fingerprint
+must match the configured webhook, preventing an unnoticed destination change.
+Pause unloads the service and releases its sleep-prevention assertion. Resume
+loads the existing configuration and history.
+
+The service prevents idle sleep while running. The Mac must remain powered,
+online and logged in, with the lid open; forced sleep, shutdown or logout stops
+local work. This is a local alerting service and does not submit brokerage orders,
+verify broker fills, track actual holdings or claim realized trading returns.
+
+
+Technique definitions: [docs/technique-rules.md](docs/technique-rules.md).
+Data contracts: [docs/data-connections.md](docs/data-connections.md).
+
+---
+
 <p align="center">
   <img src="assets/TauricResearch.png" style="width: 60%; height: auto;">
 </p>
@@ -302,3 +371,4 @@ Please reference our work if you find *TradingAgents* provides you with some hel
       url={https://arxiv.org/abs/2412.20138}, 
 }
 ```
+

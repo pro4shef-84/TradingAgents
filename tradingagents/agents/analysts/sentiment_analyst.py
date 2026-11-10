@@ -42,6 +42,7 @@ from tradingagents.agents.utils.structured import (
 )
 from tradingagents.dataflows.reddit import fetch_reddit_posts
 from tradingagents.dataflows.stocktwits import fetch_stocktwits_messages
+from tradingagents.research_considerations import CHATTER_RESEARCH_POLICY
 
 
 def _seven_days_back(trade_date: str) -> str:
@@ -135,6 +136,8 @@ def _build_system_message(
     """Assemble the sentiment-analyst system message with structured data blocks."""
     return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
 
+{CHATTER_RESEARCH_POLICY}
+
 ## Data sources (pre-fetched, in this prompt)
 
 ### News headlines — Yahoo Finance, past 7 days
@@ -160,11 +163,11 @@ Community discussion. Engagement signal via upvote score and comment count. Subr
 
 ## How to analyze this data (best practices)
 
-1. **Read the StockTwits Bullish/Bearish ratio as a leading retail-sentiment signal.** A 70/30 bullish/bearish split is moderately bullish; ≥90/10 may indicate over-extension and contrarian risk; 50/50 is uncertainty. Sample size matters — base rates on the actual message count, not percentages alone.
+1. **Describe the observed StockTwits sentiment labels.** Report the sample size and denominator, including unlabeled messages. Label proportions describe only the retrieved sample; do not treat arbitrary thresholds as calibrated trading signals or infer a change without comparable historical samples.
 
 2. **Look for cross-source divergences.** If news framing is bearish but StockTwits is overwhelmingly bullish, that mismatch is itself a signal — it can mean retail is leaning into a thesis the news flow hasn't caught up to (or vice versa, that retail is chasing while institutions are cautious).
 
-3. **Weight Reddit posts by engagement.** A 400-upvote / 200-comment thread reflects community attention; a 3-upvote post is noise. Read the body excerpts for context — the title alone often misleads.
+3. **Use Reddit engagement to describe attention, not credibility.** Low-engagement posts can contain useful evidence and popular posts can be wrong. Read body excerpts and linked evidence for context; titles alone can mislead.
 
 4. **Distinguish opinion from event.** A news headline ("Nvidia announces $500M Corning deal") is an event; a StockTwits post ("buying NVDA, this is going to moon") is opinion. Both are inputs but should be weighted differently in your conclusions.
 
