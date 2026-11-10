@@ -21,6 +21,7 @@ from tradingagents.pilot.operations import slack_webhook
 from tradingagents.pilot.screen import market_clock,utcnow,queue_key
 from tradingagents.pilot.signal_monitor import advance,new_state,TERMINAL
 from tradingagents.pilot.trade_planner import build_plans
+from tradingagents.pilot.earnings import earnings_dates, earnings_rejection
 
 ROOT=Path(__file__).resolve().parents[2]
 BASE=ROOT/'results/automation'
@@ -115,6 +116,15 @@ def morning(state,config,session,now):
     retained=[]
     for plan in result['plans']:
         ticker=plan['ticker']
+        try:
+            dates=earnings_dates(ticker,session)
+        except Exception:
+            dates=[]
+        reason=earnings_rejection(dates,session,xcals.get_calendar('XNYS'))
+        result.setdefault('earnings_checks',{})[ticker]=dict(dates=[str(d) for d in dates],checked_at=now.isoformat(),source='Yahoo Finance')
+        if reason:
+            result['rejected'][ticker]=reason
+            continue
         baseline=pd.Timestamp(reviewed.get(ticker,pd.Timestamp(progress['asof']+' 16:00',tz='America/New_York').isoformat()))
         flagged=[n for n in news['items'] if needs_review(plan,n,baseline)]
         if flagged:
