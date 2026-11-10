@@ -27,7 +27,7 @@ BASE=ROOT/'results/automation'
 CONFIG=BASE/'config.json'
 STATE=BASE/'state.json'
 LABEL='com.shef.market-trading.trade-alerts'
-MATERIAL_NEWS=re.compile(r'bankrupt|going.concern|trading.halt|restatement|fraud|investigation|sued|lawsuit|clinical.*fail|FDA.*reject|withdraw.*guidance|convertible.*offering',re.I)
+MATERIAL_NEWS=re.compile(r'bankrupt|going.concern|trading.halt|restatement|fraud|investigation|\bsued\b|lawsuit|clinical.*fail|FDA.*reject|withdraw.*guidance|convertible.*offering',re.I)
 
 
 def needs_review(plan,item,baseline):
