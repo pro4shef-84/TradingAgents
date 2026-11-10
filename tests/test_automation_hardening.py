@@ -72,3 +72,31 @@ def test_earnings_window_respects_holiday_and_date_range():
     assert earnings_rejection(['2026-12-01'], '2026-11-25', cal) is None
     assert earnings_rejection(['2026-11-24', '2026-11-27'], '2026-11-25', cal) == 'earnings_within_2_sessions'
     assert earnings_rejection(['2026-10-01'], '2026-11-25', cal) == 'earnings_date_unknown'
+
+
+@pytest.mark.parametrize('failures,spy_failed,raises', [(5,False,False),(50,False,True),(0,True,True)])
+def test_symbol_failure_budget(morning_case, monkeypatch, tmp_path, failures, spy_failed, raises):
+    state, config, now = morning_case
+    errors = {f'BAD{i}':'unavailable' for i in range(failures)}
+    if spy_failed:
+        errors['SPY'] = 'unavailable'
+    rows = [dict(ticker='SAMPLE', research_queue='continuation', eligibility='eligible')]
+    coverage = dict(universe_count=2000, successful_symbols=2000-failures, benchmark_fresh=not spy_failed)
+    monkeypatch.setattr(a, '_load_rows', lambda *args: (rows, errors, coverage))
+    if raises:
+        with pytest.raises(ValueError):
+            a.morning(state, config, '2026-11-10', now)
+        assert not state.get('signals')
+    else:
+        a.morning(state, config, '2026-11-10', now)
+        assert state['signals']['2026-11-10:SAMPLE']['status'] == 'pending'
+        assert 'Coverage: 1,995/2,000 symbols (5 unavailable)' in state['outbox']['2026-11-10:morning']['text']
+    saved = json.loads((tmp_path/'research/2026-11-10/coverage.json').read_text())
+    assert saved['errors'] == errors
+
+
+def test_missing_fresh_benchmark_rejected(morning_case, monkeypatch):
+    state, config, now = morning_case
+    monkeypatch.setattr(a, '_load_rows', lambda *args: ([], {}, dict(universe_count=2000, benchmark_available=True, benchmark_fresh=False)))
+    with pytest.raises(ValueError, match='SPY'):
+        a.morning(state, config, '2026-11-10', now)

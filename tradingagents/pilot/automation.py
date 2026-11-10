@@ -2,6 +2,7 @@
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -84,8 +85,23 @@ def morning(state,config,session,now):
     if rows_path.exists():rows=load(rows_path,[]);coverage=load(directory/'coverage.json',{})
     else:
         rows,errors,coverage=_load_rows(ROOT,directory,progress['asof'],progress['started_at'],True,progress)
-        if errors:raise ValueError(f'Daily acquisition incomplete: {len(errors)} symbols; retrying later')
-        save_json(rows_path,rows);save_json(directory/'coverage.json',coverage)
+        coverage['errors']=errors
+        save_json(directory/'coverage.json',coverage)
+    errors=coverage.get('errors',{})
+    total=coverage.get('universe_count',0)
+    failures=len([ticker for ticker in errors if ticker!='SPY'])
+    budget=float(config.get('max_symbol_failure_pct',1.0))
+    if not math.isfinite(budget) or not 0<=budget<=100:
+        raise ValueError('Invalid symbol failure budget')
+    if 'SPY' in errors or not coverage.get('benchmark_fresh',False):
+        raise ValueError('SPY benchmark acquisition incomplete')
+    if total<=0 or failures*100/total>budget:
+        raise ValueError(f'Daily acquisition exceeds failure budget: {failures}/{total} symbols')
+    rows=[row for row in rows if row['ticker'] not in errors]
+    coverage.update(successful_symbols=min(coverage.get('successful_symbols',len(rows)),total-failures),
+                    unavailable_symbols=failures)
+    save_json(directory/'coverage.json',coverage)
+    save_json(rows_path,rows)
     news=_news(ROOT,directory,now.isoformat(),True)
     if news.get('sources',{}).get('alpaca_news',{}).get('status')!='connected':
         raise ValueError('Morning news collection incomplete; retrying later')
@@ -137,6 +153,7 @@ def morning(state,config,session,now):
     result.update(prepared_at=utcnow(),trade_session=session,data_session=progress['asof'],coverage=coverage,supplemental=supplemental)
     save_json(directory/'plans.json',result);save_json(directory/'news.json',news);save_json(directory/'enriched_rows.json',rows)
     text=f'*Morning trade plans | {session} | UPDATED PENDING LIST*\nReplaces earlier untriggered ideas. Price alerts: {config["feed_label"]}; checks every minute.\n\n'
+    text+=f'Coverage: {coverage["successful_symbols"]:,}/{total:,} symbols ({failures} unavailable)\n\n'
     text+='\n\n'.join(card_text(p) for p in result['plans']) or 'No setups meet the entry/risk rules today.'
     events=[e for e in config.get('economic_events',[]) if e['session']==session]
     if events:text+='\n\n'+ ' · '.join(e['display'] for e in events)

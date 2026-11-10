@@ -83,7 +83,9 @@ def _load_rows(root, directory, asof, now, refresh, state):
     return rows,errors,dict(universe_file=str(source/'universe.csv'),universe_count=len(members),
                             price_mode='refreshed' if refresh else 'local_cache',
                             successful_symbols=len(rows),failed_symbols=len(errors),
-                            benchmark_available=benchmark is not None)
+                            benchmark_available=benchmark is not None,
+                            benchmark_fresh=bool(benchmark is not None and not benchmark.empty
+                                and (prices/'SPY.csv').exists() and str(benchmark.index[-1].date())==asof))
 
 
 def _news(root, directory, now, refresh):
