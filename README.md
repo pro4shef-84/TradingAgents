@@ -51,7 +51,9 @@ Future known economic events can be maintained in `results/automation/config.jso
 
 State, plans, source snapshots, delivery receipts and logs are under
 `results/automation/`. Delivery attempts are persisted before network writes;
-ambiguous attempts are not automatically retried. The destination fingerprint
+ambiguous network attempts are not automatically retried. HTTP 429 and 5xx responses
+retry after the server delay (60 seconds by default), up to five total attempts.
+Server-error retries can duplicate messages; this is not an exactly-once guarantee. The destination fingerprint
 must match the configured webhook, preventing an unnoticed destination change.
 Pause unloads the service and releases its sleep-prevention assertion. Resume
 loads the existing configuration and history.

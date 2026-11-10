@@ -1,4 +1,4 @@
-"""Local research scheduler and durable, at-most-once Slack observation alerts."""
+"""Local research scheduler and durable Slack observation alerts with bounded retries."""
 import fcntl
 import hashlib
 import json
@@ -51,20 +51,58 @@ def enqueue(state,event_id,text):
     state.setdefault('outbox',{}).setdefault(event_id,dict(status='pending',text=text))
 
 
-def flush(state,config,send=True):
-    if not send:return
-    webhook=slack_webhook()
-    if not webhook:raise ValueError('Slack webhook is not configured')
-    if hashlib.sha256(webhook.encode()).hexdigest()!=config['destination_sha256']:
-        raise ValueError('Slack destination changed; posting suspended pending configuration review')
-    for identifier,item in state.setdefault('outbox',{}).items():
-        if item['status']!='pending':continue
-        item.update(status='sending',attempted_at=utcnow());save_json(STATE,state)
+def retry_time(response, now):
+    value = getattr(response, 'headers', {}).get('Retry-After')
+    try:
+        seconds = float(value)
+        if not math.isfinite(seconds):
+            raise ValueError('Invalid retry delay')
+        return now + pd.Timedelta(seconds=max(0., seconds))
+    except (TypeError, ValueError):
         try:
-            response=requests.post(webhook,json={'text':item['text'],'unfurl_links':False,'unfurl_media':False},timeout=15)
-            item.update(status='sent' if response.status_code==200 and response.text.strip()=='ok' else 'rejected',http_status=response.status_code)
-        except requests.RequestException:item['status']='uncertain'
-        item['completed_at']=utcnow();save_json(STATE,state)
+            stamp = pd.Timestamp(parsedate_to_datetime(value))
+            return max(now, stamp.tz_convert('UTC'))
+        except (TypeError, ValueError, OverflowError):
+            return now + pd.Timedelta(seconds=60)
+
+
+def flush(state, config, send=True):
+    if not send:
+        return
+    webhook = slack_webhook()
+    if not webhook:
+        raise ValueError('Slack webhook is not configured')
+    if hashlib.sha256(webhook.encode()).hexdigest() != config['destination_sha256']:
+        raise ValueError('Slack destination changed; posting suspended pending configuration review')
+    now = pd.Timestamp(utcnow())
+    for item in state.setdefault('outbox', {}).values():
+        if item['status'] != 'pending':
+            continue
+        if item.get('retry_after') and now < pd.Timestamp(item['retry_after']):
+            continue
+        attempts = item.get('attempts', 0)
+        if attempts >= 5:
+            item['status'] = 'rejected'
+            save_json(STATE, state)
+            continue
+        item.update(status='sending', attempted_at=utcnow(), attempts=attempts+1)
+        item.pop('retry_after', None)
+        save_json(STATE, state)
+        try:
+            response = requests.post(webhook, json={'text':item['text'], 'unfurl_links':False, 'unfurl_media':False}, timeout=15)
+            item['http_status'] = response.status_code
+            if response.status_code == 200 and response.text.strip() == 'ok':
+                item['status'] = 'sent'
+            elif response.status_code == 429 or 500 <= response.status_code < 600:
+                item['status'] = 'pending' if item['attempts'] < 5 else 'rejected'
+                if item['status'] == 'pending':
+                    item['retry_after'] = retry_time(response, now).isoformat()
+            else:
+                item['status'] = 'rejected'
+        except requests.RequestException:
+            item['status'] = 'uncertain'
+        item['completed_at'] = utcnow()
+        save_json(STATE, state)
 
 
 def card_text(plan):

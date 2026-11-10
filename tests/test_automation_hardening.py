@@ -140,3 +140,72 @@ def test_monitor_failure_still_runs_recap_and_delivery(morning_case, monkeypatch
     a.tick(send=False, now='2026-11-10T21:05:00Z')
     assert calls == ['recap', 'flush']
     assert a.load(a.STATE, {})['job_errors']['monitor']['type'] == 'ValueError'
+
+
+from types import SimpleNamespace
+import hashlib
+
+
+@pytest.fixture
+def delivery_case(monkeypatch, tmp_path):
+    monkeypatch.setattr(a, 'STATE', tmp_path/'state.json')
+    monkeypatch.setattr(a, 'slack_webhook', lambda: 'fake hook')
+    clock = [pd.Timestamp('2026-11-10T13:00:00Z')]
+    monkeypatch.setattr(a, 'utcnow', lambda: clock[0].isoformat())
+    config = {'destination_sha256':hashlib.sha256(b'fake hook').hexdigest()}
+    state = {}
+    a.enqueue(state, 'test', 'message')
+    return state, config, clock
+
+
+@pytest.mark.parametrize('status', [429,503])
+def test_retry_waits_then_succeeds(delivery_case, monkeypatch, status):
+    state, config, clock = delivery_case
+    calls = []
+    def post(*args, **kwargs):
+        calls.append(1)
+        return SimpleNamespace(status_code=status if len(calls)==1 else 200, text='ok', headers={'Retry-After':'120'})
+    monkeypatch.setattr(a.requests, 'post', post)
+    a.flush(state, config)
+    assert state['outbox']['test']['status'] == 'pending'
+    clock[0] += pd.Timedelta(seconds=119)
+    a.flush(state, config)
+    assert len(calls) == 1
+    clock[0] += pd.Timedelta(seconds=1)
+    a.flush(state, config)
+    assert state['outbox']['test']['status'] == 'sent'
+    assert state['outbox']['test']['attempts'] == 2
+
+
+def test_retry_gives_up_after_five_attempts(delivery_case, monkeypatch):
+    state, config, clock = delivery_case
+    calls = []
+    monkeypatch.setattr(a.requests, 'post', lambda *args, **kwargs: calls.append(1) or SimpleNamespace(status_code=500,text='',headers={}))
+    for _ in range(7):
+        a.flush(state, config)
+        clock[0] += pd.Timedelta(seconds=60)
+    assert len(calls) == 5
+    assert state['outbox']['test']['status'] == 'rejected'
+
+
+def test_network_exception_stays_uncertain(delivery_case, monkeypatch):
+    state, config, clock = delivery_case
+    calls = []
+    def fail(*args, **kwargs):
+        calls.append(1)
+        raise a.requests.Timeout()
+    monkeypatch.setattr(a.requests, 'post', fail)
+    a.flush(state, config)
+    clock[0] += pd.Timedelta(hours=1)
+    a.flush(state, config)
+    assert len(calls) == 1
+    assert state['outbox']['test']['status'] == 'uncertain'
+
+
+def test_retry_http_date_header_and_permanent_rejection(delivery_case, monkeypatch):
+    state, config, clock = delivery_case
+    response = SimpleNamespace(headers={'Retry-After':'Tue, 10 Nov 2026 13:02:00 GMT'})
+    assert a.retry_time(response, clock[0]) == clock[0]+pd.Timedelta(minutes=2)
+    monkeypatch.setattr(a.requests, 'post', lambda *args, **kwargs: SimpleNamespace(status_code=403,text='',headers={}))
+    a.flush(state, config)
+    assert state['outbox']['test']['status'] == 'rejected'
