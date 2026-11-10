@@ -72,7 +72,6 @@ def install(seed=None):
     save_json(a.STATE,state)
     logs=a.BASE/'logs';logs.mkdir(exist_ok=True)
     path=Path.home()/'Library/LaunchAgents'/f'{a.LABEL}.plist';path.parent.mkdir(parents=True,exist_ok=True)
-    target=f'gui/{os.getuid()}/{a.LABEL}'
     unload()
     spec=dict(Label=a.LABEL,ProgramArguments=['/usr/bin/caffeinate','-i','-s',str(ROOT/'.venv/bin/python'),str(ROOT/'scripts/trade_automation.py'),'serve'],
         WorkingDirectory=str(ROOT),RunAtLoad=True,KeepAlive=True,ThrottleInterval=30,
@@ -94,7 +93,6 @@ def main():
     elif args.command=='status':result=status()
     elif args.command in ('pause','resume'):
         config=a.load(a.CONFIG,{});config['enabled']=args.command=='resume';save_json(a.CONFIG,config)
-        target=f'gui/{os.getuid()}/{a.LABEL}'
         if args.command=='pause':unload()
         elif not status()['loaded']:
             path=Path.home()/'Library/LaunchAgents'/f'{a.LABEL}.plist'

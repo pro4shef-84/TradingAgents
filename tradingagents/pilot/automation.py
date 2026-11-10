@@ -188,7 +188,7 @@ def morning(state,config,session,now):
                 if status.get('truncated'):raise ValueError('Selected-stock news coverage capped')
                 news['items']=list({i['id']:i for i in news['items']+extra}.values());selected_status.append(status)
             news['sources']['selected_news']=selected_status
-        except Exception as exc:raise ValueError('Selected-stock news refresh incomplete; plans withheld') from None
+        except Exception:raise ValueError('Selected-stock news refresh incomplete; plans withheld') from None
     # Material new headlines are a review gate, not an inferred bull/bear vote.
     reviewed=config.get('reviewed_plans',{})
     retained=[]
