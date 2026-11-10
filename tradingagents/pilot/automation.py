@@ -47,8 +47,23 @@ def load(path,default):
 def key(plan):return plan['trade_session']+':'+plan['ticker']
 
 
-def enqueue(state,event_id,text):
-    state.setdefault('outbox',{}).setdefault(event_id,dict(status='pending',text=text))
+def outbox_kind(event_id, item):
+    if item.get('kind'):
+        return item['kind']
+    suffix=event_id.rsplit(':',1)[-1]
+    if suffix=='morning':
+        return 'plan'
+    if suffix in {'ENTRY_SIGNAL_OBSERVED','TP1_LEVEL_OBSERVED','TP2_LEVEL_OBSERVED',
+                  'STOP_LEVEL_OBSERVED','SETUP_EXPIRED','AMBIGUOUS_INTERVAL',
+                  'AMBIGUOUS_ENTRY_INTERVAL','TIME_EXIT'}:
+        return 'event'
+    return 'notice'
+
+
+def enqueue(state,event_id,text,kind=None,shadow=False):
+    kind=kind or outbox_kind(event_id,{})
+    status='shadow' if shadow and kind in ('plan','event') else 'pending'
+    state.setdefault('outbox',{}).setdefault(event_id,dict(status=status,text=text,kind=kind,created_at=utcnow()))
 
 
 def retry_time(response, now):
@@ -67,6 +82,15 @@ def retry_time(response, now):
 
 
 def flush(state, config, send=True):
+    changed=False
+    for event_id,item in state.setdefault('outbox',{}).items():
+        if config.get('shadow_mode',False) and item['status']=='pending' and outbox_kind(event_id,item) in ('plan','event'):
+            item['status']='shadow'
+            changed=True
+    if changed:
+        save_json(STATE,state)
+    if not any(item['status']=='pending' for item in state['outbox'].values()):
+        return
     if not send:
         return
     webhook = slack_webhook()
@@ -196,7 +220,9 @@ def morning(state,config,session,now):
     events=[e for e in config.get('economic_events',[]) if e['session']==session]
     if events:text+='\n\n'+ ' · '.join(e['display'] for e in events)
     text+='\n\n<https://www.bls.gov/schedule/2026/11_sched_list.htm|Economic calendar>'
-    enqueue(state,session+':morning',text)
+    enqueue(state,session+':morning',text,kind='plan',shadow=config.get('shadow_mode',False))
+    if config.get('shadow_mode',False):
+        enqueue(state,session+':coverage',f'*SHADOW research coverage | {session}*\nCoverage: {coverage["successful_symbols"]:,}/{total:,} symbols ({failures} unavailable). Plans recorded locally; trade cards withheld.')
     state.setdefault('jobs',{})[session+':morning']=dict(status='complete',completed_at=utcnow(),plans=len(result['plans']))
 
 
@@ -318,18 +344,26 @@ def monitor(state,config,session,opening,closing,now):
                 s['history'].append(event);events.append(event)
         for event in events:
             identifier=key(s['plan'])+':'+event['kind']
-            enqueue(state,identifier,event_text(event,s['plan'],config,now))
+            enqueue(state,identifier,event_text(event,s['plan'],config,now),kind='event',shadow=config.get('shadow_mode',False))
     state['market_data_health']=dict(checked_at=now.isoformat(),feed=config['feed'],stale_symbols=stale)
     if stale:
         bucket=now.floor('30min').isoformat()
         enqueue(state,session+':stale:'+bucket,'*Price alerts paused for stale observations:* '+', '.join(stale)+f'\nFeed: {config["feed_label"]}. Fresh data is required for new entry signals.')
 
 
-def recap(state,session,now):
+def recap(state,session,now,config=None):
+    config=config or {}
     signals=[s for s in state.get('signals',{}).values() if s['plan']['trade_session']<=session and any(pd.Timestamp(e['at']).tz_convert('America/New_York').date().isoformat()==session for e in s['history'])]
-    lines=[f'*Market-close signal recap | {session}*']
+    header='SHADOW — not posted as plans | ' if config.get('shadow_mode',False) else ''
+    lines=[f'*{header}Market-close signal recap | {session}*']
     lines += [f'{s["plan"]["ticker"]} · {s["plan"]["side"]} · {s["status"].replace("_"," ")}' for s in signals]
     if not signals:lines.append('No entry or exit conditions were observed today.')
+    if config.get('shadow_mode',False):
+        for event_id,item in state.get('outbox',{}).items():
+            created=item.get('created_at')
+            same_day=(str(pd.Timestamp(created).tz_convert('America/New_York').date())==session) if created else event_id.startswith(session+':')
+            if item['status']=='shadow' and same_day:
+                lines.append('Would have sent:\n'+item['text'])
     lines.append('Signal observations only; no broker execution or realized P&L tracked.')
     enqueue(state,session+':recap','\n'.join(lines))
     state.setdefault('jobs',{})[session+':recap']=dict(status='complete',completed_at=now.isoformat())
@@ -389,7 +423,7 @@ def tick(send=True, now=None):
                 run_job('monitor', lambda: monitor(state, config, session, opening, closing, current))
             if (closing+pd.Timedelta(minutes=5) <= current < closing+pd.Timedelta(hours=2)
                     and jobs.get(session+':recap', {}).get('status') != 'complete'):
-                run_job('recap', lambda: recap(state, session, current))
+                run_job('recap', lambda: recap(state, session, current, config))
 
         run_job('schedule', scheduled_jobs)
         if errors and calendar.is_session(session) and current < calendar.session_close(session):

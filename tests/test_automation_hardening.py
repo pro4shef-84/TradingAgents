@@ -255,3 +255,44 @@ def test_monitor_stale_threshold_separate_from_entry_freshness(morning_case, mon
              open=99.,low=98.,high=99.5,close=99.)]}})
     a.monitor(state,config,'2026-11-10',opening,opening+pd.Timedelta(hours=6.5),now)
     assert bool(state['market_data_health']['stale_symbols']) is stale
+
+
+
+def test_shadow_suppresses_new_and_previously_queued_trade_items(delivery_case, monkeypatch):
+    state, config, clock = delivery_case
+    state['outbox'].clear()
+    config['shadow_mode'] = True
+    a.enqueue(state, '2026-11-10:morning', 'plan')
+    a.enqueue(state, '2026-11-10:SAMPLE:ENTRY_SIGNAL_OBSERVED', 'entry', kind='event', shadow=True)
+    monkeypatch.setattr(a.requests, 'post', lambda *args, **kwargs: pytest.fail('Shadow trade items must never post'))
+    a.flush(state, config)
+    assert all(item['status']=='shadow' for item in state['outbox'].values())
+    config['shadow_mode'] = False
+    a.flush(state, config)
+    assert all(item['status']=='shadow' for item in state['outbox'].values())
+
+
+def test_shadow_keeps_health_and_coverage_delivery(delivery_case, monkeypatch):
+    state, config, clock = delivery_case
+    state['outbox'].clear()
+    config['shadow_mode'] = True
+    for event, text in [('2026-11-10:morning','plan'),('2026-11-10:coverage','coverage'),('2026-11-10:health:bucket','health')]:
+        a.enqueue(state, event, text)
+    posted = []
+    monkeypatch.setattr(a.requests, 'post', lambda *args, **kwargs: posted.append(kwargs['json']['text']) or SimpleNamespace(status_code=200,text='ok'))
+    a.flush(state, config)
+    assert posted == ['coverage','health']
+    a.recap(state, '2026-11-10', clock[0], config)
+    recap = state['outbox']['2026-11-10:recap']
+    assert recap['status'] == 'pending'
+    assert 'SHADOW — not posted as plans' in recap['text']
+    assert 'Would have sent:\nplan' in recap['text']
+
+
+def test_shadow_morning_records_plan_and_separate_coverage(morning_case):
+    state, config, now = morning_case
+    config['shadow_mode'] = True
+    a.morning(state, config, '2026-11-10', now)
+    assert state['outbox']['2026-11-10:morning']['status'] == 'shadow'
+    assert state['outbox']['2026-11-10:coverage']['status'] == 'pending'
+    assert state['signals']['2026-11-10:SAMPLE']['status'] == 'pending'

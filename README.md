@@ -42,6 +42,17 @@ to review instead of inferring a direction. News interpretation is a conservativ
 rule gate, not a comprehensive human or LLM news review. The universe membership
 uses the latest saved universe file; prices and news are refreshed each morning.
 
+`shadow_mode` defaults to false. When enabled, plans and entry/exit observations
+are retained as `shadow` outbox items; they never post as trade cards, including
+items already queued before the switch. Health, coverage and premarket notices
+still post. The closing recap is labeled SHADOW and includes the withheld messages.
+Turning shadow mode off does not replay old shadow items. The deployment mode
+must be selected explicitly; code changes do not modify the live configuration.
+
+Monitoring for a few weeks can assess data gaps, signal frequency and operational
+reliability. It does not establish profitability or recommend when to trade live.
+Observations are not fills, and no performance claim is inferred from target touches.
+
 CPI is explicitly configured for November 10, 2026. The premarket update attempts
 the official BLS RSS feed and also collects current SPY/macro news. If the BLS
 feed is unavailable or stale, it says so rather than reporting invented results.
