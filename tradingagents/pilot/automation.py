@@ -264,6 +264,7 @@ def event_text(event,plan,config,now):
             'SETUP_EXPIRED':'SETUP EXPIRED','AMBIGUOUS_INTERVAL':'REVIEW REQUIRED — stop and target in the same minute',
             'AMBIGUOUS_ENTRY_INTERVAL':'REVIEW REQUIRED — entry interval crossed an exit level','TIME_EXIT':'TIME EXIT REFERENCE'}
     text=f'*{plan["ticker"]} | {plan["side"]} | {labels[event["kind"]]}*'
+    if event.get('confirmation_coverage'):text+='\nConfirmation: '+event['confirmation_coverage']
     if event.get('price') is not None:text+=f'\nObserved minute close: ${event["price"]:.2f}'
     if event.get('level') is not None:
         sign=1 if plan['side']=='LONG' else -1
@@ -305,9 +306,10 @@ def monitor(state,config,session,opening,closing,now):
         if s['status'] in ('pending','armed') and s['plan']['trade_session']<session:
             s['status']='expired';continue
         records=cache['records'].get(ticker,[])
-        if opening+pd.Timedelta(minutes=3)<now<closing and (not records or (now-pd.Timestamp(records[-1]['available_at'])).total_seconds()>180):stale.append(ticker)
+        if opening+pd.Timedelta(seconds=config.get('stale_seconds',600))<now<closing and (not records or (now-pd.Timestamp(records[-1]['available_at'])).total_seconds()>config.get('stale_seconds',600)):stale.append(ticker)
         ready=state.get('jobs',{}).get(session+':premarket',{}).get('status')=='complete'
-        events=advance(s,records,opening,closing,now,allow_entries=ready)
+        events=advance(s,records,opening,closing,now,allow_entries=ready,fresh_seconds=180,
+                       min_confirmation_bars=config.get('min_confirmation_bars',12),feed_label=config['feed'].upper())
         if s['status']=='active' and now>=closing:
             age=len(calendar.sessions_in_range(s['plan']['trade_session'],session))
             if age>=5:

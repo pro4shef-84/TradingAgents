@@ -16,7 +16,9 @@ On XNYS trading days, the service starts the 2,000-stock refresh at **06:00
 America/Denver** and posts when it completes. It publishes a **06:45 premarket
 update**, checks completed one-minute price observations during the regular
 session, and posts a recap five minutes after the actual exchange close.
-New entries require a complete 15-minute confirmation followed by a later retest.
+New entries require at least 12 observed minutes in a 15-minute confirmation block,
+including its closing minute, followed by a later retest. The threshold is configurable
+with `min_confirmation_bars`; missing bars are never synthesized.
 Weekends, exchange holidays, early closes, and daylight-saving changes use the
 exchange calendar. Missed premarket scans are not presented as live-market
 recommendations later in the day.
@@ -25,7 +27,9 @@ The existing account authorizes IEX observations but rejected current SIP quote
 access during setup. Alerts explicitly identify **IEX single-exchange** coverage;
 historical SIP remains the daily-analysis source. New entry alerts require
 observations no older than three minutes and a successful morning/news update.
-Missing candle minutes prevent confirmation. Historic catch-up observations are
+Confirmation coverage is recorded in history and entry alerts. The confirmation
+closing minute and retest must each be no older than three minutes; feed health
+alerts use a separate `stale_seconds` threshold of 600 seconds. Historic catch-up observations are
 labeled with their original time. A minute crossing both stop and target is
 reported as requiring review; the system never invents execution order or fills.
 

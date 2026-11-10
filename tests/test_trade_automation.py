@@ -38,9 +38,9 @@ def test_entry_requires_completed_confirmation_then_later_retest():
     assert advance(state,rows,OPEN,CLOSE,OPEN+pd.Timedelta(minutes=16))==[]
 
 
-def test_missing_confirmation_minute_or_future_bar_cannot_trigger():
+def test_insufficient_confirmation_minutes_or_future_bar_cannot_trigger():
     rows=confirmed();state=new_state(plan())
-    advance(state,rows[:5]+rows[6:],OPEN,CLOSE,OPEN+pd.Timedelta(minutes=16))
+    advance(state,rows[:5]+rows[9:],OPEN,CLOSE,OPEN+pd.Timedelta(minutes=16))
     assert state['status']=='pending'
     state=new_state(plan())
     advance(state,rows,OPEN,CLOSE,OPEN+pd.Timedelta(minutes=14))

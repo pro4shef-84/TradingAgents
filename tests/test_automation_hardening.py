@@ -209,3 +209,49 @@ def test_retry_http_date_header_and_permanent_rejection(delivery_case, monkeypat
     monkeypatch.setattr(a.requests, 'post', lambda *args, **kwargs: SimpleNamespace(status_code=403,text='',headers={}))
     a.flush(state, config)
     assert state['outbox']['test']['status'] == 'rejected'
+
+
+@pytest.mark.parametrize('missing,can_arm', [({2,7},True), ({2,4,7,9},False), ({2,14},False)])
+def test_sparse_confirmation_requires_threshold_and_last_minute(missing, can_arm):
+    opening = pd.Timestamp('2026-11-10T14:30:00Z')
+    closing = opening+pd.Timedelta(hours=6.5)
+    state = a.new_state(dict(ticker='SAMPLE', side='LONG', entry=100., stop=97., targets=[106.,109.]))
+    rows = [dict(event_at=(opening+pd.Timedelta(minutes=i)).isoformat(),
+                 available_at=(opening+pd.Timedelta(minutes=i+1)).isoformat(),
+                 open=99.5,low=99.,high=100.5,close=100.2) for i in range(15) if i not in missing]
+    a.advance(state, rows, opening, closing, opening+pd.Timedelta(minutes=15))
+    assert (state['status']=='armed') is can_arm
+    if can_arm:
+        assert state['history'][-1]['confirmation_coverage'] == '13/15 IEX minutes'
+        rows.append(dict(event_at=(opening+pd.Timedelta(minutes=15)).isoformat(),
+                         available_at=(opening+pd.Timedelta(minutes=16)).isoformat(),
+                         open=100.,low=99.95,high=100.2,close=100.1))
+        events = a.advance(state, rows, opening, closing, opening+pd.Timedelta(minutes=16))
+        assert events[0]['confirmation_coverage'] == '13/15 IEX minutes'
+        assert '13/15 IEX minutes' in a.event_text(events[0], state['plan'], {'feed_label':'IEX'}, opening+pd.Timedelta(minutes=16))
+
+
+def test_sparse_confirmation_requires_fresh_last_minute():
+    opening = pd.Timestamp('2026-11-10T14:30:00Z')
+    state = a.new_state(dict(ticker='SAMPLE', side='LONG', entry=100., stop=97., targets=[106.,109.]))
+    rows = [dict(event_at=(opening+pd.Timedelta(minutes=i)).isoformat(),
+                 available_at=(opening+pd.Timedelta(minutes=i+1)).isoformat(),
+                 open=99.5,low=99.,high=100.5,close=100.2) for i in range(15)]
+    a.advance(state, rows, opening, opening+pd.Timedelta(hours=6.5), opening+pd.Timedelta(minutes=18,seconds=1))
+    assert state['status'] == 'pending'
+
+
+@pytest.mark.parametrize('age,stale', [(599,False),(601,True)])
+def test_monitor_stale_threshold_separate_from_entry_freshness(morning_case, monkeypatch, age, stale):
+    state, config, now = morning_case
+    config['feed'] = 'iex'
+    opening = pd.Timestamp('2026-11-10T14:30:00Z')
+    now = opening+pd.Timedelta(hours=1)
+    signal = a.new_state(dict(ticker='SAMPLE',side='LONG',entry=100.,stop=97.,targets=[106.,109.],trade_session='2026-11-10'))
+    state['signals'] = {'2026-11-10:SAMPLE':signal}
+    available = now-pd.Timedelta(seconds=age)
+    monkeypatch.setattr(a, 'fetch_intraday', lambda *args, **kwargs: {'records':{'SAMPLE':[
+        dict(event_at=(available-pd.Timedelta(minutes=1)).isoformat(),available_at=available.isoformat(),
+             open=99.,low=98.,high=99.5,close=99.)]}})
+    a.monitor(state,config,'2026-11-10',opening,opening+pd.Timedelta(hours=6.5),now)
+    assert bool(state['market_data_health']['stale_symbols']) is stale
