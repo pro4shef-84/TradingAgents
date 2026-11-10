@@ -295,47 +295,71 @@ def recap(state,session,now):
     state.setdefault('jobs',{})[session+':recap']=dict(status='complete',completed_at=now.isoformat())
 
 
-def tick(send=True,now=None):
-    BASE.mkdir(parents=True,exist_ok=True)
+def tick(send=True, now=None):
+    BASE.mkdir(parents=True, exist_ok=True)
     with (BASE/'worker.lock').open('a') as lock:
-        try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        except BlockingIOError:return {'status':'already_running'}
-        config=load(CONFIG,{})
-        if not config.get('enabled'):return {'status':'disabled'}
-        state=load(STATE,dict(jobs={},signals={},outbox={}))
-        # A crash during an HTTP attempt must not cause a duplicate automatic post.
-        for item in state.get('outbox',{}).values():
-            if item['status']=='sending':item['status']='uncertain'
-        current=pd.Timestamp(now or utcnow()).tz_convert('UTC')
-        state.update(last_tick_at=utcnow(),pid=os.getpid(),mode='running',last_error=None)
-        save_json(STATE,state)
-        session=str(current.tz_convert('America/New_York').date());calendar=xcals.get_calendar('XNYS')
         try:
-            if calendar.is_session(session):
-                opening=calendar.session_open(session);closing=calendar.session_close(session)
-                local=current.tz_convert('America/Denver')
-                jobs=state.setdefault('jobs',{})
-                morning_due=pd.Timestamp(session+' '+config.get('morning','06:00'),tz='America/Denver')
-                update_due=pd.Timestamp(session+' '+config.get('premarket_update','06:45'),tz='America/Denver')
-                # Do not backfill an already missed morning list into a live market.
-                if morning_due<=local and current<opening and jobs.get(session+':morning',{}).get('status')!='complete':
-                    morning(state,config,session,current);save_json(STATE,state)
-                if update_due<=local and current<opening+pd.Timedelta(minutes=30) and jobs.get(session+':morning',{}).get('status')=='complete' and jobs.get(session+':premarket',{}).get('status')!='complete':
-                    premarket(state,config,session,current);save_json(STATE,state)
-                if opening<=current and (current<=closing+pd.Timedelta(minutes=5) or
-                    current<closing+pd.Timedelta(hours=2) and jobs.get(session+':recap',{}).get('status')!='complete'):
-                    monitor(state,config,session,opening,closing,current)
-                if closing+pd.Timedelta(minutes=5)<=current<closing+pd.Timedelta(hours=2) and jobs.get(session+':recap',{}).get('status')!='complete':
-                    recap(state,session,current)
-            flush(state,config,send=send)
-        except Exception as exc:
-            state['last_error']=dict(type=type(exc).__name__,detail=str(exc) if isinstance(exc,ValueError) else 'Operation failed',at=utcnow())
-            if calendar.is_session(session) and current<calendar.session_close(session):
-                enqueue(state,session+':health:'+current.floor('30min').isoformat(),'*Trade automation needs attention:* '+state['last_error']['type']+'. Pending signals are withheld until required data is available.')
-                try:flush(state,config,send=send)
-                except Exception:pass
-        state['last_tick_completed_at']=utcnow();save_json(STATE,state)
-        return {k:state.get(k) for k in ('last_tick_at','last_tick_completed_at','last_error','pid')}
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {'status': 'already_running'}
+        config = load(CONFIG, {})
+        if not config.get('enabled'):
+            return {'status': 'disabled'}
+        state = load(STATE, dict(jobs={}, signals={}, outbox={}))
+        for item in state.get('outbox', {}).values():
+            if item['status'] == 'sending':
+                item['status'] = 'uncertain'
+        current = pd.Timestamp(now or utcnow()).tz_convert('UTC')
+        session = str(current.tz_convert('America/New_York').date())
+        if state.get('job_error_session') != session:
+            state.update(job_error_session=session, job_errors={})
+        errors = state.setdefault('job_errors', {})
+        state.update(last_tick_at=utcnow(), pid=os.getpid(), mode='running')
+        save_json(STATE, state)
+        calendar = xcals.get_calendar('XNYS')
+
+        def run_job(name, action):
+            try:
+                action()
+                errors.pop(name, None)
+            except Exception as exc:
+                errors[name] = dict(job=name, type=type(exc).__name__,
+                                    detail=str(exc) if isinstance(exc, ValueError) else 'Operation failed',
+                                    at=utcnow())
+            state['last_error'] = list(errors.values())[-1] if errors else None
+            save_json(STATE, state)
+
+        def scheduled_jobs():
+            if not calendar.is_session(session):
+                return
+            opening = calendar.session_open(session)
+            closing = calendar.session_close(session)
+            local = current.tz_convert('America/Denver')
+            jobs = state.setdefault('jobs', {})
+            morning_due = pd.Timestamp(session+' '+config.get('morning', '06:00'), tz='America/Denver')
+            update_due = pd.Timestamp(session+' '+config.get('premarket_update', '06:45'), tz='America/Denver')
+            if morning_due <= local and current < opening and jobs.get(session+':morning', {}).get('status') != 'complete':
+                run_job('morning', lambda: morning(state, config, session, current))
+            if (update_due <= local and current < opening+pd.Timedelta(minutes=30)
+                    and jobs.get(session+':morning', {}).get('status') == 'complete'
+                    and jobs.get(session+':premarket', {}).get('status') != 'complete'):
+                run_job('premarket', lambda: premarket(state, config, session, current))
+            if opening <= current and (current <= closing+pd.Timedelta(minutes=5)
+                    or current < closing+pd.Timedelta(hours=2) and jobs.get(session+':recap', {}).get('status') != 'complete'):
+                run_job('monitor', lambda: monitor(state, config, session, opening, closing, current))
+            if (closing+pd.Timedelta(minutes=5) <= current < closing+pd.Timedelta(hours=2)
+                    and jobs.get(session+':recap', {}).get('status') != 'complete'):
+                run_job('recap', lambda: recap(state, session, current))
+
+        run_job('schedule', scheduled_jobs)
+        if errors and calendar.is_session(session) and current < calendar.session_close(session):
+            enqueue(state, session+':health:'+current.floor('30min').isoformat(),
+                    '*Trade automation needs attention:* '+', '.join(sorted(errors))+
+                    '. Entry signals require successful prerequisite jobs; active stop/target monitoring is attempted independently.')
+        run_job('delivery', lambda: flush(state, config, send=send))
+        state['last_tick_completed_at'] = utcnow()
+        save_json(STATE, state)
+        return {k: state.get(k) for k in ('last_tick_at', 'last_tick_completed_at', 'last_error', 'pid')}
 
 
 def serve():

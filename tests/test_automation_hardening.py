@@ -100,3 +100,43 @@ def test_missing_fresh_benchmark_rejected(morning_case, monkeypatch):
     monkeypatch.setattr(a, '_load_rows', lambda *args: ([], {}, dict(universe_count=2000, benchmark_available=True, benchmark_fresh=False)))
     with pytest.raises(ValueError, match='SPY'):
         a.morning(state, config, '2026-11-10', now)
+
+
+
+def test_premarket_failure_still_monitors_active_stop(morning_case, monkeypatch, tmp_path):
+    state, config, now = morning_case
+    config.update(enabled=True, feed='iex')
+    a.save_json(a.CONFIG, config)
+    signal = a.new_state(dict(ticker='SAMPLE', side='LONG', entry=100., stop=97., targets=[106.,109.], trade_session='2026-11-10'))
+    signal['status'] = 'active'
+    state.update(signals={'2026-11-10:SAMPLE':signal}, jobs={'2026-11-10:morning':{'status':'complete'}})
+    a.save_json(a.STATE, state)
+    def fail(*args):
+        raise ValueError('News unavailable')
+    monkeypatch.setattr(a, 'premarket', fail)
+    monkeypatch.setattr(a, 'fetch_intraday', lambda *args, **kwargs: {'records':{'SAMPLE':[
+        dict(event_at='2026-11-10T14:34:00Z', available_at='2026-11-10T14:35:00Z',
+             open=100., low=96., high=100., close=98.)]}})
+    monkeypatch.setattr(a.requests, 'post', lambda *args, **kwargs: pytest.fail('No HTTP posts during tests'))
+    a.tick(send=False, now='2026-11-10T14:35:00Z')
+    saved = a.load(a.STATE, {})
+    assert saved['signals']['2026-11-10:SAMPLE']['status'] == 'stopped'
+    assert '2026-11-10:SAMPLE:STOP_LEVEL_OBSERVED' in saved['outbox']
+    assert saved['job_errors']['premarket']['type'] == 'ValueError'
+    assert saved['last_error']['job'] == 'premarket'
+    assert any(':health:' in key for key in saved['outbox'])
+
+
+def test_monitor_failure_still_runs_recap_and_delivery(morning_case, monkeypatch):
+    state, config, now = morning_case
+    config['enabled'] = True
+    a.save_json(a.CONFIG, config)
+    calls = []
+    def fail(*args):
+        raise ValueError('Market feed unavailable')
+    monkeypatch.setattr(a, 'monitor', fail)
+    monkeypatch.setattr(a, 'recap', lambda *args: calls.append('recap'))
+    monkeypatch.setattr(a, 'flush', lambda *args, **kwargs: calls.append('flush'))
+    a.tick(send=False, now='2026-11-10T21:05:00Z')
+    assert calls == ['recap', 'flush']
+    assert a.load(a.STATE, {})['job_errors']['monitor']['type'] == 'ValueError'
